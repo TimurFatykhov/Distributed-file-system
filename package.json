@@ -1,0 +1,24 @@
+{
+  "name": "WEB_lab",
+  "description": "",
+  "version": "1.0.0",
+  "main": "anotherNode.js",
+  "dependencies": {
+    "dgram": "^1.0.1"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TimurFatykhov/Distributed-file-system.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/TimurFatykhov/Distributed-file-system/issues"
+  },
+  "homepage": "https://github.com/TimurFatykhov/Distributed-file-system#readme"
+}
