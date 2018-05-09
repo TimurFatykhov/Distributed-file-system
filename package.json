@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "main": "anotherNode.js",
   "dependencies": {
-    "dgram": "^1.0.1"
+    "dgram": "^1.0.1",
+    "js-md5": "^0.7.3"
   },
   "devDependencies": {},
   "scripts": {
