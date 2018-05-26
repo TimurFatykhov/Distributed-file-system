@@ -5,7 +5,9 @@
   "main": "anotherNode.js",
   "dependencies": {
     "dgram": "^1.0.1",
-    "js-md5": "^0.7.3"
+    "express": "^4.16.3",
+    "js-md5": "^0.7.3",
+    "pug": "^2.0.3"
   },
   "devDependencies": {},
   "scripts": {

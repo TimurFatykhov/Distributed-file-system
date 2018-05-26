@@ -1,40 +1,47 @@
 var dgram = require('dgram');
 var md5 = require('js-md5');
-const fs = require('fs');
+var fproc = require('./fileProcessing.js');
 
 function printSeparator(){
     console.log("______________________________________________________" + '\n');
 };
 
 var PORT = 41234;
-var GENERAL_PORT = 41234;
-var MY_ID = md5(String(Math.floor(Math.random() * 1e5)));
+var F_CHUNK_SIZE = 1024;    // size of chunk in our dicstributed system
+const STORAGE_DIR_NAME = 'storage'
 var MY_NAME = "sadomango777";
+// var MY_ID = String(md5(String(Math.floor(Math.random() * 1e5))));
+var MY_ID = '009a5510ad149a8e0c750cb62e255175';
+var MY_ADDR = "";
+
+var requestedFiles = {};
+var GENERAL_PORT = 41234;
 var mySocket = dgram.createSocket('udp4');
+const STORAGE_PATH = `${__dirname}/${STORAGE_DIR_NAME}`
+
+fproc = new fproc(STORAGE_PATH);
 
 // If you want to switch off broadcast: pass 'no-broad' as 1st parameter with calling myNode.py script by terminal
-noBroadcast = false;
+var noBroadcast = false;
 if(process.argv[2] == 'no-broad'){
     noBroadcast = true;
 }
+var keepSilent = true;
+if(process.argv[2] == 'debug'){
+    keepSilent = false;
+}
+
 if(Number.isInteger(process.argv[2])){
     GENERAL_PORT = +process.argv[2];
 }
 
-// read file names from path
-const storagePath = './storage';
-fs.readdir(storagePath, (err, files) => {
-    console.log('FILES IN STORAGE:');
-    files.forEach(file => {
-      console.log(file);
-    });
-    printSeparator();
-  })
+var knownNodes = {};        // nodes store
 
-// nodes store
-var knownNodes = {};
+var filesDB = {};           // store files 
+var fileSet = new Set();      // set of stored files on current node
 
-function process_broad(data){
+// [0, ID, ADDR, PORT, NAME]
+function processBroad(data){
     // [0, ID, ADDR, PORT, NAME]
     newNodeInfo = {};
     newNodeInfo['ADDR'] = data[2];
@@ -49,10 +56,6 @@ function process_broad(data){
         console.log('<- To "' + newNodeInfo['NAME'] + '":\t' + message);
         mySocket.send(message, 0, message.length, +newNodeInfo['PORT'], newNodeInfo['ADDR'], function(err, bytes) {
             if (err) {
-                console.log('\n********************************'); 
-                console.log('*** Looks like you tried to make broadcast, but GENERAL_PORT is occupied.'); 
-                console.log('*** Try to run script with parameter "myNode.js no-broad" from terminal.'); 
-                console.log('********************************\n'); 
                 throw err
             };
         });
@@ -61,9 +64,13 @@ function process_broad(data){
     newNodeID = data[1];
     knownNodes[newNodeID] = newNodeInfo
     console.log(`I memorised ${newNodeInfo['NAME']}`)
+
+    // now we have to send info about own stored files
+    shareInfoAboutMyFiles(filesDB);
 }
 
-function process_broad_answ(data){
+// [1, IDsource, ID_node, ADDR, PORT, NAME]
+function processBroadAnsw(data){
     // [1, IDsource, ID_node, ADDR, PORT, NAME]
 
     newNodeInfo = {};
@@ -75,61 +82,316 @@ function process_broad_answ(data){
         knownNodes[data[1]] = newNodeInfo;
         console.log(`I memorised ${newNodeInfo['NAME']}`)
     }
+
+    // **************_HARDCODE BELOW_**************
+    // **************_HARDCODE BELOW_**************
+    // **************_HARDCODE BELOW_**************
+
+    // HARDCODE_FILEID = Object.keys(knownNodes)[1];
+    // HARDCODE_FILEID = '59ca0efa9f5633cb0371bbc0353378d8';
+    // var nearestHolder = getNearestNodes(HARDCODE_FILEID, 1)['nodes'][0][0];
+
+    // var nearAddr = knownNodes[nearestHolder]['ADDR'];
+    // var nearPort = knownNodes[nearestHolder]['PORT'];
+    // findFileInSystem(HARDCODE_FILEID, nearestHolder, nearAddr, nearPort)
+    // **************_HARDCODE ABOVE_**************
+    // **************_HARDCODE ABOVE_**************
+    // **************_HARDCODE ABOVE_**************
 }
 
-function put(data){
-    // [6, ID, ADDR, PORT]
-
-}
-
-function process_ok(data){
-    // [7, ID]
-
-}
-
-function process_get(data){
+// [2, ID]
+function processGetFile(data, addrRes, portRes){
     // [2, ID]
+    var searchID = data[1];
+    contain = fileSet.has(searchID);
 
-    // look at
-    // [3, ID, ADDR, PORT]
+    if (contain){   // i have
+        // ANSW: [5,ID,IDholder,filename,length]
+        var message = [5, searchID, MY_ID, searchID, filesDB[searchID].size];
+        message = JSON.stringify(message);
+        console.log('<- To "' + `${addrRes}:${portRes}` + '":\t' + message);
+        mySocket.send(message, 0, message.length, +portRes, addrRes, function(err, bytes) {
+            if (err) {
+                throw err
+            };
+        });
+    }
+    else{
+        // ANSW: [3,ID,IDholder,address,port]
+        var nearestNodes = getNearestNodes(searchID, 2)['nodes'];
+        for (var i = 0; i < Math.min(nearestNodes.length, 2); i++){
+            console.log('port here: ' + mySocket.address.port);
 
-    // I have
-    // [5, sID, NAME, LENGHT]
+            var message = [3, searchID, nearestNodes[i][0], mySocket.address.address, mySocket.address.port];
+            message = JSON.stringify(message);
+            console.log('<- To "' + `${addrRes}:${portRes}` + '":\t' + message);
+            mySocket.send(message, 0, message.length, +portRes, addrRes, function(err, bytes) {
+                if (err) {
+                    throw err
+                };
+            });
+        }
+    }
+}
+// [3,ID,IDholder,address,port]
+function processLookAt(data){
+    // [3,ID,IDholder,address,port]
+    console.log(`It said look for ${data[3]} at holder ${knownNodes[data[2]]['NAME']}`);
+    // findFileInSystem(data[1], data[2], data[3], data[4]);
+}
+
+// [5,ID,IDholder,filename,length]
+function processIHave(data){
+    // [5,ID,IDholder,filename,length]
+    console.log('WE FOUND THE FILE!');
+    console.log(`filename: ${data[3]}, holder: ${knownNodes[data[2]]['NAME']}`);
+
+    var fileNameH = data[3];    // hash name
+    var length = data[4];
+    var numOfBlocks = Math.ceil(length/F_CHUNK_SIZE);
+    var nodeInfo = knownNodes[data[2]];
+    console.log(`filenameH: ${fileNameH}, blocks num: ${numOfBlocks}`);
+    askForFile(fileNameH, 0, numOfBlocks, knownNodes[data[2]]['ADDR'], knownNodes[data[2]]['PORT']);
+}
+
+// [6,ID,IDholder,address,port]
+function saveFileHolder(data){
+    // [6,ID,IDholder,address,port]
+    //       ID - file ID
+    // IDholder - holder ID
+    var ID = data[1];
+    filesDB[ID] = {};
+
+    var holderInfo = {}
+    holderInfo['ID'] = data[2];
+    holderInfo['ADDR'] = data[3];
+    holderInfo['PORT'] = data[4];
+
+    filesDB[ID]['holder'] = holderInfo;
+
+    var message = [7, MY_ID];
+    message = JSON.stringify(message);
+    console.log('<- To "' + knownNodes[holderInfo['ID']].NAME + '":\t' + message);
+    mySocket.send(message, 0, message.length, +holderInfo['PORT'], holderInfo['ADDR'], function(err, bytes) {
+        if (err) {
+            throw err
+        };
+    });
+
+    console.log(`I know that ${knownNodes[data[2]]["NAME"]} has a file ${data[1]}`);
+}
+
+// [7,ID]
+function saveFileHolderAnsw(data, addr, port){
+    // [7,ID]
+    console.log(`${addr}:${port} knows that i have file ${data[1]}`)
+    // проверяем: все ли получили?!
+}
+
+// received: ?<FILE HASH><index><number of blocks to get>         1 + 16 + 4 + 4 bytes?
+function giveHashBlocks(buf, addr, port){
+    var fileHashBytes = buf.slice(1, 17);
+    var fileHashHex = bytesToHex(fileHashBytes);
+
+    if(filesDB[fileHashHex] == undefined){
+        console.log('I have not requested file!');
+        return;
+    }
+
+    var indexBytes = buf.slice(17,21);
+    var index = indexBytes.readUInt32BE(0);
+    var numOfBlocks = buf.readUInt32BE(21);
+
+    if(!keepSilent) console.log('from giveBLocks fileHashHEX: ' + fileHashHex)
+    
+    if (numOfBlocks + i > filesDB[fileHashHex].numOfChunks){
+        console.log("ATTENTION!!!! requested more num of blocks then i have! => return");
+        return
+    }
+
+    // send <- '@<FILE HASH><index><HASH OF BLOCK><HASH OF BLOCK> 1 + 16 + 4 + fileSize
+    var carriage = 0;       // carriage for message
+    var metaLength = 21;
+    var hChunkSize = 16;    // 16 bytes for hash
+    var fileSize = filesDB[fileHashHex].numOfChunks * hChunkSize;
+    var message = Buffer.alloc(metaLength + fileSize);
+    var twoPartsBytes = Buffer.concat([Buffer.from('@'), fileHashBytes, indexBytes], metaLength);    
+    twoPartsBytes.copy(message, 0, 0, metaLength); // target, targetStart, srcStart, srcEnd
+    carriage += metaLength;
+
+    for(var i = index; i < Math.min(filesDB[fileHashHex].numOfChunks, numOfBlocks); i++){
+        var chunkHex = filesDB[fileHashHex].hChunks[i];
+        var chunkBytes = hexToBytes(chunkHex);
+        chunkBytes.copy(message, carriage, 0, hChunkSize); // target, targetStart, srcStart, srcEnd
+        carriage += hChunkSize;
+    }
+
+    mySocket.send(message, 0, carriage, +port, addr, function(err, bytes){
+        if(err) throw err;
+    });
+}
+
+// received: -<FILE HASH><index><number of blocks to get>         1 + 16 + 4 + 4 bytes?
+function giveFileBlocks(buf, addr, port){
+    var fileHashBytes = buf.slice(1, 17);
+    var fileHashHex = bytesToHex(fileHashBytes);
+
+    if(filesDB[fileHashHex] == undefined){
+        console.log('I have not requested file!');
+        return;
+    }
+
+    var indexBytes = buf.slice(17,21);
+    var index = indexBytes.readUInt32BE(0);
+    var numOfBlocks = buf.readUInt32BE(21);
+
+    if(!keepSilent) console.log('from giveBLocks fileHashHEX: ' + fileHashHex)
+    
+    if (numOfBlocks + i > filesDB[fileHashHex].numOfChunks){
+        console.log("ATTENTION!!!! requested more num of blocks then i have! => return");
+        return
+    }
+
+    // send <- '+<FILE HASH><index><BLOCK><BLOCK> 1 + 16 + 4 + fileSize
+    var carriage = 0;       // carriage for message
+    var metaLength = 21;
+    var fileSize = filesDB[fileHashHex].numOfChunks * F_CHUNK_SIZE;
+    var message = Buffer.alloc(metaLength + fileSize);
+    var twoPartsBytes = Buffer.concat([Buffer.from('+'), fileHashBytes, indexBytes], metaLength);    
+    twoPartsBytes.copy(message, 0, 0, metaLength); // target, targetStart, srcStart, srcEnd
+    carriage += metaLength;
+
+    for(var i = index; i < Math.min(filesDB[fileHashHex].numOfChunks, numOfBlocks); i++){
+        var chunkBytes = filesDB[fileHashHex].fChunks[i];
+        chunkBytes.copy(message, carriage, 0, F_CHUNK_SIZE); // target, targetStart, srcStart, srcEnd
+        carriage += F_CHUNK_SIZE;
+    }
+
+    mySocket.send(message, 0, carriage, +port, addr, function(err, bytes){
+        if(err) throw err;
+    });
+}
+
+// received: '@<FILE HASH><index><HASH OF BLOCK><HASH OF BLOCK> 1 + 16 + 4 + fileSize
+function getHashChunks(buf, addr, port){
+    var fileHashBytes = buf.slice(1, 17);
+    var hName = bytesToHex(fileHashBytes);
+
+    if(filesDB[hName] == undefined){
+        console.log("I didn't request this file!");
+        return;
+    }
+
+    var index = requestedFiles[hName].index;
+    var numOfBlocks = requestedFiles[hName].numOfBlocks;
+    var hBlock;
+
+    console.log("&&&&&&&&&&&&&&&&&&&");
+    console.log(index);
+    console.log(numOfBlocks);
+    for(var i = index, j = 0; i < numOfBlocks; j++, i++){
+        var hBlock = buf.slice(21+j*16, 21+(j+1)*16);
+        requestedFiles[hName].hBlocks[i] = bytesToHex(hBlock);
+    }
+    
+    console.log("&&&&&&&&&&&&&&&&&&& I CAUGHT FILES HASHES!!! " + JSON.stringify(requestedFiles));
+    console.log("&&&&&&&&&&&&&&&&&&& BUF: " + buf.length);
+}
+
+// received: '+<FILE HASH><index><BLOCK><BLOCK> 1 + 16 + 4 + fileSize
+function getFileChunks(buf, addr, port){
+    var fileHashBytes = buf.slice(1, 17);
+    var hName = bytesToHex(fileHashBytes);
+
+    if(filesDB[hName] == undefined){
+        console.log("I didn't request this file!");
+        return;
+    }
+
+    var index = requestedFiles[hName].index;
+    var numOfBlocks = requestedFiles[hName].numOfBlocks;
+    var metaSize = 21;
+    var fileSize = buf.length - metaSize;  // for last part size calculating
+    var remainderSize = fileSize;
+
+    console.log("%%%%%%%%%%%%%%%%%%");
+    console.log(index);
+    console.log(numOfBlocks);
+    var chunkSize = Math.min(remainderSize, F_CHUNK_SIZE);
+    for(var i = index, j = 0; i < numOfBlocks; j++, i++){
+        var fBlock = buf.slice(21+j*chunkSize, 21+(j+1)*chunkSize);
+        requestedFiles[hName].fBlocks[i] = fBlock;
+        chunkSize = Math.min(remainderSize - F_CHUNK_SIZE, F_CHUNK_SIZE);
+    }
+    
+    console.log("%%%%%%%%%%%%%%%%%% I CAUGHT FILES CHUNKS!!! " + JSON.stringify(requestedFiles));
+    console.log("%%%%%%%%%%%%%%%%%% BUF: " + buf.length);
 }
 
 mySocket.on('message', function (raw_message, remote) {
+    var buf = Buffer(raw_message);
+    // if (remote.address == MY_ADDR && buf.toString('utf8')[0] == '[') return   // message by myself
     console.log('Caught req from:\t' + remote.address + ':' + remote.port);
     
-    data = JSON.parse(raw_message);
+    var buf = Buffer(raw_message);
+    if (/^[\+\-\?\@]/.test(buf)){    // work with files
+        switch(buf.toString('utf8')[0]){
+            case '?':
+            console.log('received "?..."')
+            giveHashBlocks(buf, remote.address, remote.port);
+            break;
+            case '@':
+            console.log('received "@..."')
+            getHashChunks(buf, remote.address, remote.port);
+            break;
+            case '+':
+            console.log('received "+..."')
+            getFileChunks(buf, remote.address, remote.port);
+            break;
+            case '-':
+            console.log('received "-..."')
+            giveFileBlocks(buf, remote.address, remote.port);
+            break;
+            default: console.log('useless string :)')
+        }
+        return  // request is processed
+    }
+
+    var data = JSON.parse(raw_message);
 
     console.log('Received message:\t' + String(raw_message));
-    command = Number(data[0]);
+    var command = Number(data[0]);
 
     switch(command){
         case 0:
-        process_broad(data);
+        processBroad(data);
         break;
 
         case 1:
-        process_broad_answ(data);
+        processBroadAnsw(data);
+        break;
+
+        case 2:
+        processGetFile(data, remote.address, remote.port);
         break;
 
         case 3:
+        processLookAt(data);
         break;
 
-        case 4: console.log('hello 2');
+        case 5:
+        processIHave(data);
         break;
 
-        case 5: console.log('hello 2');
+        case 6: 
+        saveFileHolder(data);
         break;
 
-        case 6: console.log('hello 2');
+        case 7:
+        saveFileHolderAnsw(data, remote.address, remote.port);
         break;
 
-        case 7: console.log('hello 2');
-        break;
-
-        default: console.log('hello default');
+        default: console.log('command is incorrect');
     }
      printSeparator()
 });
@@ -143,31 +405,181 @@ mySocket.on('listening', function () {
     thisNode['PORT'] = address.port;
     thisNode['NAME'] = MY_NAME;
 
-    knownNodes[+MY_ID] = thisNode;
+    knownNodes[MY_ID] = thisNode;
 
     console.log('Address: ' + address.address + ":" + address.port + `. Name: ${MY_NAME}, ID: ${MY_ID}`);
-     printSeparator()
+    printSeparator()
+
+    var res = fproc.processFiles(1024, true);
+    var builtInFilesInfo = res[0];
+    console.log('fileNames here: ' + JSON.stringify(res[1]));
+    for (i in res[1]){
+        fileSet.add(res[1][i]);
+    }
+
+    filesDB = builtInFilesInfo;
+
     if (noBroadcast) return
-    
     broad();
 });
 
-// broad
+// broadcast
 function broad(){
-    var commandNum = 0;
-    var MY_ID = 100;
     var address = mySocket.address();
-    var message = [commandNum, MY_ID, address.address, address.port, MY_NAME ];
+    var message = [0, MY_ID, MY_ADDR, address.port, MY_NAME ];
     message = JSON.stringify(message);
     mySocket.send(message, 0, message.length, GENERAL_PORT, '255.255.255.255', function(err, bytes) {
         if (err) {
-            console.log('***Looks like you tried to make broadcast, but GENERAL_PORT is occupied.***'); 
-            console.log('***Try to run script with parameter "myNode.js no-broad" in terminal.***'); 
             throw err
         };
         console.log('BROADCAST DONE');
          printSeparator()
     });
+}
+
+function shareInfoAboutMyFiles(filesInfo){
+    var keys = Object.keys(filesInfo);
+    for(i in keys){
+        //  [6,ID,IDholder,address,port]
+        var message = [6, keys[i], MY_ID, mySocket.address().address, mySocket.address().port];
+        message = JSON.stringify(message);
+
+        var KNOWN_IDS = Object.keys(knownNodes)
+        for(i in KNOWN_IDS){
+            if(KNOWN_IDS[i] != MY_ID){
+                var portRes = knownNodes[KNOWN_IDS[i]]['PORT'];
+                var addrRes = knownNodes[KNOWN_IDS[i]]['ADDR'];
+                console.log('<- To "' + `${addrRes}:${portRes}` + '":\t' + message);
+                mySocket.send(message, 0, message.length, +portRes, addrRes, function(err, bytes) {
+                    if (err) {
+                        throw err
+                    };
+                });
+            }
+        }
+    }
+}
+  
+function findFileInSystem(fileID){
+    var nearestHolder = getNearestNodes(fileID, 1)['nodes'][0][0];
+    var nearAddr = knownNodes[nearestHolder]['ADDR'];
+    var nearPort = knownNodes[nearestHolder]['PORT'];
+
+    var message = [2, fileID];
+    message = JSON.stringify(message);
+    console.log('<- To "' + `${nearAddr}:${nearPort}` + '":\t' + message);
+    mySocket.send(message, 0, message.length, +nearPort, nearAddr, function(err, bytes) {
+        if (err) {
+            throw err
+        };
+    });
+
+    setTimeout(function(){console.log('hello THERE')}, 1000);
+    return requestedFiles;
+}
+
+function askForFile(hName, index, numOfBlocks, addr, port){
+    var hArr = [];
+    hArr.length = index + numOfBlocks;
+    var fArr = [];
+    fArr.length = index + numOfBlocks;
+
+    // ask for Hashes:
+    requestedFiles[hName] = {hBlocks: hArr, fBlocks: fArr, index: index, numOfBlocks: numOfBlocks};
+    var fileHashBytes = Buffer.from(hexToBytes(hName));
+    var message = Buffer.alloc(25);
+    var metaLength = 17;
+    var twoPartsBytes = Buffer.concat([Buffer.from('?'), fileHashBytes], metaLength);
+    twoPartsBytes.copy(message, 0, 0, metaLength); // target, targetStart, srcStart, srcEnd
+    message.writeUInt32BE(index, 17);
+    message.writeUInt32BE(numOfBlocks, 21);
+    mySocket.send(message, 0, message.length, +port, addr, function(err, bytes) {
+        if(err) console.log(err);
+    });
+
+    // ask for File chunks:
+    var messageF = Buffer.alloc(25);
+    var twoPartsBytes = Buffer.concat([Buffer.from('-'), fileHashBytes], metaLength);
+    twoPartsBytes.copy(messageF, 0, 0, metaLength); // target, targetStart, srcStart, srcEnd
+    messageF.writeUInt32BE(index, 17);
+    messageF.writeUInt32BE(numOfBlocks, 21);
+    mySocket.send(messageF, 0, messageF.length, +port, addr, function(err, bytes) {
+        if(err) console.log(err);
+    });
+}
+
+  function getNearestNodes(searchID, count){
+    if (keepSilent != true) keepSilent = false;
+    if (!keepSilent) console.log('****');
+
+    var keys = Object.keys(knownNodes);
+    if (!keepSilent) console.log('keys: ' + keys);
+    var distances = [];
+    for(i in keys){
+        if (keys[i] != MY_ID){
+            if (!keepSilent) console.log(`keys[${i}]: ` + keys[i] + ' len=' + keys[i].length);
+            if (!keepSilent) console.log('searchID: ' + searchID + ' len=' + searchID.length);
+            if (!keepSilent) console.log('XOR: ' + xorString(keys[i], searchID));
+            distances.push([keys[i], xorString(keys[i], searchID)]);    // hash, xor
+        }
+    }
+    if (!keepSilent) console.log('unsorted distances: ' + distances);
+    // sort by distances
+    distances.sort((a,b) => {return a[1] > b[1]})
+    if (!keepSilent) console.log('sorted distances: ' + distances);
+
+    var returnedSize = Math.min(distances.length, count)
+    if (!keepSilent) console.log('****');
+
+    return {
+        'size': returnedSize,
+        'nodes': distances.slice(0, returnedSize)
+    }
   }
 
+  function xorString(a, b){
+    var xorLen = Math.min(a.length, b.length);
+    a = a.slice(0, xorLen);
+    b = b.slice(0, xorLen);
+    var res = "";
+
+    for (var i = 0; i < xorLen / 2; i++){ 
+        var preres = (parseInt(a.slice(2*i,2*i+2), 16) ^ parseInt(b.slice(2*i,2*i+2), 16)).toString(16);
+        preres = preres.length == 1? '0' + preres : preres;
+
+        res += preres;
+        console.log('res from xor: ' + res);
+    }
+    return res;
+  }
+
+  function bytesToHex(byteArray) {
+    return Array.from(byteArray, function(byte) {
+      return ('0' + (byte & 0xFF).toString(16)).slice(-2);
+    }).join('')
+  }
+
+  // not clear parser from hex to bytes
+  function hexToBytes(hex){
+    var buf = Buffer.alloc(hex.length/2);   // 2 symbols are 1 byte 0f -> 0000|1111
+    for (var i = 0; i < hex.length / 2; i++){ 
+        var preres = parseInt(hex.slice(2*i,2*i+2), 16)
+        buf.writeUInt8(preres, i);
+    }
+    return buf;
+  }
+
+const ifaces = require('os').networkInterfaces()
+Object.keys(ifaces).forEach(dev => {
+    ifaces[dev].filter(details => {
+        if (details.family === 'IPv4' && details.internal === false) {
+            MY_ADDR = details.address;
+        }
+    })
+});
+
 mySocket.bind(PORT);
+
+module.exports = {
+    findFile: findFileInSystem
+};
