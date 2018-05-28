@@ -6,13 +6,15 @@ function printSeparator(){
     console.log("______________________________________________________" + '\n');
 };
 
+var MY_ID = String(md5(String(Math.floor(Math.random() * 1e5))));
+
 var PORT = 41234;
 var F_CHUNK_SIZE = 1024;    // size of chunk in our dicstributed system
 const STORAGE_DIR_NAME = 'storage'
 var MY_NAME = "sadomango777";
-// var MY_ID = String(md5(String(Math.floor(Math.random() * 1e5))));
 var MY_ID = '009a5510ad149a8e0c750cb62e255175';
 var MY_ADDR = "";
+var exportCallback;         // callback passed by server
 
 var requestedFiles = {};
 var GENERAL_PORT = 41234;
@@ -287,15 +289,15 @@ function getHashChunks(buf, addr, port){
     var hBlock;
 
     console.log("&&&&&&&&&&&&&&&&&&&");
-    console.log(index);
-    console.log(numOfBlocks);
     for(var i = index, j = 0; i < numOfBlocks; j++, i++){
         var hBlock = buf.slice(21+j*16, 21+(j+1)*16);
         requestedFiles[hName].hBlocks[i] = bytesToHex(hBlock);
     }
-    
-    console.log("&&&&&&&&&&&&&&&&&&& I CAUGHT FILES HASHES!!! " + JSON.stringify(requestedFiles));
-    console.log("&&&&&&&&&&&&&&&&&&& BUF: " + buf.length);
+    requestedFiles[hName]['hBlocksReceived'] = true;
+    if(requestedFiles[hName]['fBlocksReceived'] & requestedFiles[hName]['hBlocksReceived']){
+        tryToSaveFile(hName);
+    }
+    console.log("&&&&&&&&&&&&&&&&&&&");
 }
 
 // received: '+<FILE HASH><index><BLOCK><BLOCK> 1 + 16 + 4 + fileSize
@@ -315,17 +317,19 @@ function getFileChunks(buf, addr, port){
     var remainderSize = fileSize;
 
     console.log("%%%%%%%%%%%%%%%%%%");
-    console.log(index);
-    console.log(numOfBlocks);
+
+
     var chunkSize = Math.min(remainderSize, F_CHUNK_SIZE);
     for(var i = index, j = 0; i < numOfBlocks; j++, i++){
         var fBlock = buf.slice(21+j*chunkSize, 21+(j+1)*chunkSize);
         requestedFiles[hName].fBlocks[i] = fBlock;
         chunkSize = Math.min(remainderSize - F_CHUNK_SIZE, F_CHUNK_SIZE);
     }
-    
-    console.log("%%%%%%%%%%%%%%%%%% I CAUGHT FILES CHUNKS!!! " + JSON.stringify(requestedFiles));
-    console.log("%%%%%%%%%%%%%%%%%% BUF: " + buf.length);
+    requestedFiles[hName]['fBlocksReceived'] = true;
+    if(requestedFiles[hName]['fBlocksReceived'] & requestedFiles[hName]['hBlocksReceived']){
+        tryToSaveFile(hName);
+    }
+    console.log("%%%%%%%%%%%%%%%%%%");
 }
 
 mySocket.on('message', function (raw_message, remote) {
@@ -460,7 +464,12 @@ function shareInfoAboutMyFiles(filesInfo){
     }
 }
   
-function findFileInSystem(fileID){
+
+function findFileInSystem(fileID, callback){
+    exportCallback = callback;
+
+    // exportCallback('hello');
+
     var nearestHolder = getNearestNodes(fileID, 1)['nodes'][0][0];
     var nearAddr = knownNodes[nearestHolder]['ADDR'];
     var nearPort = knownNodes[nearestHolder]['PORT'];
@@ -473,9 +482,6 @@ function findFileInSystem(fileID){
             throw err
         };
     });
-
-    setTimeout(function(){console.log('hello THERE')}, 1000);
-    return requestedFiles;
 }
 
 function askForFile(hName, index, numOfBlocks, addr, port){
@@ -485,7 +491,13 @@ function askForFile(hName, index, numOfBlocks, addr, port){
     fArr.length = index + numOfBlocks;
 
     // ask for Hashes:
-    requestedFiles[hName] = {hBlocks: hArr, fBlocks: fArr, index: index, numOfBlocks: numOfBlocks};
+    requestedFiles[hName] = {hBlocks: hArr, 
+                             fBlocks: fArr, 
+                             index: index, 
+                             numOfBlocks: numOfBlocks,
+                             fBlocksReceived: false,
+                             hBlocksReceived: false};
+
     var fileHashBytes = Buffer.from(hexToBytes(hName));
     var message = Buffer.alloc(25);
     var metaLength = 17;
@@ -568,6 +580,35 @@ function askForFile(hName, index, numOfBlocks, addr, port){
     }
     return buf;
   }
+
+function checkCorrectness(hName){
+    console.log('FLAG 2228')
+    var fChunks = requestedFiles[hName].fBlocks;
+    var hChunks = requestedFiles[hName].hBlocks;
+    var receivedHChunks = [];
+    var lastHChunk; 
+    [receivedHChunks, lastHChunk] = fproc.processFileBlocks(fChunks);
+
+    if (hName == lastHChunk) 
+        return true;
+    else 
+        return false;
+}
+
+function tryToSaveFile(hName){
+    console.log('we are trying to save file!')
+    if (checkCorrectness(hName)){
+        var fChunks = requestedFiles[hName].fBlocks;
+        fproc.writeFile(fChunks, 'received.txt');
+        console.log(`FILE ${hName} is saved in my storage`);
+        exportCallback(requestedFiles);
+        return true
+    }
+    else{
+        exportCallback(null);
+        return false;
+    }
+}
 
 const ifaces = require('os').networkInterfaces()
 Object.keys(ifaces).forEach(dev => {

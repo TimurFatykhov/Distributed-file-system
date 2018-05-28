@@ -22,9 +22,20 @@ app.get('/', function(req, res){
 
 app.post('/findFile', function(req, res){
     var hName = req.body.hName;
-    var requestedFiles = otherNode.findFile(hName);
-    setTimeout(function(){res.send(JSON.stringify(requestedFiles));}, 1500);
-    res.send('hello');
+    var requestedFileInfo;
+    otherNode.findFile(hName, function(filesInfo){
+        if(filesInfo != null){
+            requestedFileInfo = filesInfo[hName];
+            data = {requestedFileInfo: requestedFileInfo, hName: hName}
+            data = JSON.stringify(data);
+            res.send(data);
+        }
+        else{
+            data = {requestedFileInfo: null, hName: null}
+            data = JSON.stringify(data);
+            res.send(data);
+        }
+    });
 });
 
 

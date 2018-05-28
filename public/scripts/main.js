@@ -1,7 +1,8 @@
 $(document).ready(function(){
 
     $('#submit').click(function(){
-        var data = {'hName': $('#hName').val()};
+        var hName = $('#hName').val();
+        var data = {'hName': hName};
         data = JSON.stringify(data);
 
         $.ajax({
@@ -9,7 +10,11 @@ $(document).ready(function(){
             url: '/findFile',
             data: data,
             success: function(res){
-                alert($('#hName').val() + ' is downloaded');
+                res = JSON.parse(res);
+                if(res.hName == hName)
+                    alert(hName + ' is downloaded');
+                else
+                    alert(hName + " isn't downloaded");
             },
             contentType: "application/json",
           });
